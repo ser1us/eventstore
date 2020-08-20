@@ -16,13 +16,27 @@ defmodule EventStore.MonitoredServer do
   defmodule State do
     @moduledoc false
 
-    defstruct [:mfa, :name, :backoff, :pid, :shutdown, :queue, monitors: MapSet.new()]
+    defstruct [
+      :mfa,
+      :name,
+      :backoff,
+      :pid,
+      :terminate?,
+      :shutdown,
+      :queue,
+      monitors: MapSet.new()
+    ]
 
     def new(monitor_opts, start_opts) do
       {_module, _fun, _args} = mfa = Keyword.fetch!(monitor_opts, :mfa)
 
+      backoff_ops =
+        monitor_opts
+        |> Keyword.take([:backoff_type, :backoff_min, :backoff_max])
+        |> Keyword.put_new(:backoff_type, :exp)
+
       %State{
-        backoff: Backoff.new(backoff_type: :exp),
+        backoff: Backoff.new(backoff_ops),
         mfa: mfa,
         name: Keyword.get(start_opts, :name),
         queue: :queue.new(),
@@ -53,14 +67,10 @@ defmodule EventStore.MonitoredServer do
   def handle_call({__MODULE__, :monitor, monitor}, _from, %State{} = state) do
     %State{monitors: monitors, name: name, pid: pid} = state
 
-    _ref = Process.monitor(monitor)
+    Process.monitor(monitor)
 
-    case pid do
-      pid when is_pid(pid) ->
-        Process.send(monitor, {:UP, name, pid}, [])
-
-      _ ->
-        :ok
+    if is_pid(pid) do
+      Process.send(monitor, {:UP, name, pid}, [])
     end
 
     state = %State{state | monitors: MapSet.put(monitors, monitor)}
@@ -88,7 +98,7 @@ defmodule EventStore.MonitoredServer do
     {:noreply, state}
   end
 
-  def handle_info(:start_process, %State{} = state) do
+  def handle_info({__MODULE__, :start_process}, %State{} = state) do
     {:noreply, start_process(state)}
   end
 
@@ -96,15 +106,7 @@ defmodule EventStore.MonitoredServer do
   Handle process exit by attempting to restart, after a delay.
   """
   def handle_info({:EXIT, pid, reason}, %State{pid: pid} = state) do
-    %State{name: name} = state
-
-    Logger.debug(fn -> "Monitored process EXIT due to: #{inspect(reason)}" end)
-
-    notify_monitors({:DOWN, name, pid, reason}, state)
-
-    state = %State{state | pid: nil}
-
-    {:noreply, delayed_start(state)}
+    on_process_exit(pid, reason, state)
   end
 
   def handle_info({:EXIT, pid, _reason}, %State{} = state) do
@@ -113,6 +115,10 @@ defmodule EventStore.MonitoredServer do
     state = %State{state | monitors: MapSet.delete(monitors, pid)}
 
     {:noreply, state}
+  end
+
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %State{pid: pid} = state) do
+    on_process_exit(pid, reason, state)
   end
 
   def handle_info(msg, %State{pid: nil} = state) do
@@ -126,13 +132,12 @@ defmodule EventStore.MonitoredServer do
   end
 
   def terminate(_reason, %State{pid: nil}), do: :ok
+  def terminate(_reason, %State{terminate?: false}), do: :ok
 
   def terminate(reason, %State{} = state) do
     %State{pid: pid, shutdown: shutdown, mfa: {module, _fun, _args}} = state
 
-    Logger.debug(fn ->
-      "Monitored server #{inspect(module)} terminate due to: #{inspect(reason)}"
-    end)
+    Logger.debug("Monitored server #{inspect(module)} terminate due to: #{inspect(reason)}")
 
     Process.exit(pid, reason)
 
@@ -162,12 +167,15 @@ defmodule EventStore.MonitoredServer do
       {:ok, pid} ->
         Logger.debug("Successfully started #{inspect(module)} (#{inspect(pid)})")
 
-        on_process_start(pid, state)
+        on_process_start(pid, %State{state | terminate?: true})
 
       {:error, {:already_started, pid}} ->
         Logger.debug("Monitored process already started #{inspect(module)} (#{inspect(pid)})")
 
-        on_process_start(pid, state)
+        # Monitor already started process to enable it to be restarted on exit
+        Process.monitor(pid)
+
+        on_process_start(pid, %State{state | terminate?: false})
 
       {:error, reason} ->
         Logger.info("Failed to start #{inspect(module)} due to: #{inspect(reason)}")
@@ -183,6 +191,18 @@ defmodule EventStore.MonitoredServer do
     :ok = notify_monitors({:UP, name, pid}, state)
 
     %State{state | pid: pid, queue: :queue.new()}
+  end
+
+  defp on_process_exit(pid, reason, %State{} = state) do
+    %State{name: name} = state
+
+    Logger.debug("Monitored process EXIT due to: " <> inspect(reason))
+
+    notify_monitors({:DOWN, name, pid, reason}, state)
+
+    state = %State{state | pid: nil, terminate?: nil}
+
+    {:noreply, delayed_start(state)}
   end
 
   defp enqueue(item, %State{queue: queue} = state) do
@@ -219,17 +239,13 @@ defmodule EventStore.MonitoredServer do
   defp notify_monitors(message, %State{} = state) do
     %State{monitors: monitors} = state
 
-    for monitor <- monitors do
-      :ok = Process.send(monitor, message, [])
-    end
-
-    :ok
+    Enum.each(monitors, &Process.send(&1, message, []))
   end
 
   defp delayed_start(%State{backoff: backoff} = state) do
     {delay, backoff} = Backoff.backoff(backoff)
 
-    Process.send_after(self(), :start_process, delay)
+    Process.send_after(self(), {__MODULE__, :start_process}, delay)
 
     %State{state | backoff: backoff}
   end
