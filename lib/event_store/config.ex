@@ -94,7 +94,7 @@ defmodule EventStore.Config do
         ]
     )
     |> Keyword.put(:backoff_type, :exp)
-    |> Keyword.put(:name, Module.concat([name, Postgrex]))
+    |> Keyword.put(:name, name)
     |> Keyword.put(:after_connect, after_connect(config))
   end
 

@@ -66,10 +66,12 @@ defmodule EventStore.Supervisor do
 
         children =
           [
-            {Postgrex, Config.postgrex_opts(config, name)},
-            MonitoredServer.child_spec(
-              mfa: {Postgrex, :start_link, [Config.sync_connect_postgrex_opts(config)]},
-              name: advisory_locks_postgrex_name
+            postgrex_connection_pool_child_spec(name, config),
+            Supervisor.child_spec(
+              {MonitoredServer,
+               mfa: {Postgrex, :start_link, [Config.sync_connect_postgrex_opts(config)]},
+               name: advisory_locks_postgrex_name},
+              id: Module.concat([advisory_locks_postgrex_name, MonitoredServer])
             ),
             {AdvisoryLocks, conn: advisory_locks_postgrex_name, name: advisory_locks_name},
             {Subscriptions.Supervisor, name: subscriptions_name},
@@ -93,6 +95,37 @@ defmodule EventStore.Supervisor do
       event_store.init(config)
     else
       {:ok, config}
+    end
+  end
+
+  # Get the child spec for the main Postgres dataabse connection pool.
+  #
+  # By default an event store instance will start its own connection pool. The
+  # `:shared_connection_pool` config option can be used to share the same
+  # database connection pool between multiple event store instances when they
+  # connect to the same physical database. This will reduce the total number of
+  # connections.
+  defp postgrex_connection_pool_child_spec(name, config) do
+    postgrex_name = Module.concat([name, Postgrex])
+
+    case Keyword.get(config, :shared_connection_pool) do
+      nil ->
+        # Use a separate connection pool for event store instance
+        {Postgrex, Config.postgrex_opts(config, postgrex_name)}
+
+      shared_connection_pool when is_atom(shared_connection_pool) ->
+        # Named connection pool that can be shared between event store instances
+        Supervisor.child_spec(
+          {MonitoredServer,
+           mfa: {Postgrex, :start_link, [Config.postgrex_opts(config, shared_connection_pool)]},
+           name: postgrex_name},
+          id: Module.concat([postgrex_name, MonitoredServer])
+        )
+
+      invalid ->
+        raise ArgumentError,
+              "Invalid `:shared_connection_pool` specified, expected an atom but got: " <>
+                inspect(invalid)
     end
   end
 end
