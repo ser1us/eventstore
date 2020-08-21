@@ -98,7 +98,7 @@ defmodule EventStore.Supervisor do
     end
   end
 
-  # Get the child spec for the main Postgres dataabse connection pool.
+  # Get the child spec for the main Postgres database connection pool.
   #
   # By default an event store instance will start its own connection pool. The
   # `:shared_connection_pool` config option can be used to share the same
