@@ -13,10 +13,9 @@ defmodule MigrationSourceTest do
   test "test migration source has the correct name and retuns a value", %{config: config} do
     # construct a query
     migration_source = Config.get_migration_source(config)
-    schema = Keyword.get(config, :schema)
 
     script =
-      "select major_version, minor_version, patch_version from #{schema}.#{migration_source}"
+      "select major_version, minor_version, patch_version from #{migration_source}"
 
     # get the result from the database
     {:ok, result} = Database.execute_query(config, script)
