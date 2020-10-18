@@ -17,8 +17,7 @@ defmodule MigrationSourceTest do
 
     table = table_name(migration_source, schema)
 
-    script =
-      "select major_version, minor_version, patch_version from #{table}"
+    script = "select major_version, minor_version, patch_version from #{table}"
 
     # get the result from the database
     {:ok, result} = Database.execute_query(config, script)
@@ -29,7 +28,6 @@ defmodule MigrationSourceTest do
     assert minor >= 0
     assert patch >= 0
   end
-
 
   defp table_name(migration_source, nil), do: migration_source
   defp table_name(migration_source, schema), do: "#{schema}.#{migration_source}"
