@@ -27,5 +27,7 @@ config :eventstore,
        Keyword.put(default_config, :database, "eventstore_jsonb_test_2")
 
 config :eventstore, SchemaEventStore, default_config
+config :eventstore, MigrationSourceEventStore, default_config
 
-config :eventstore, event_stores: [TestEventStore, SecondEventStore, SchemaEventStore]
+config :eventstore,
+  event_stores: [TestEventStore, SecondEventStore, SchemaEventStore, MigrationSourceEventStore]
