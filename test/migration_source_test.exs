@@ -14,8 +14,7 @@ defmodule MigrationSourceTest do
     # construct a query
     migration_source = Config.get_migration_source(config)
 
-    script =
-      "select major_version, minor_version, patch_version from #{migration_source}"
+    script = "select major_version, minor_version, patch_version from #{migration_source}"
 
     # get the result from the database
     {:ok, result} = Database.execute_query(config, script)
